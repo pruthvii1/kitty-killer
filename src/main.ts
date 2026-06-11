@@ -29,11 +29,15 @@ type Cat = {
   label: Mesh
   animationGroups: AnimationGroup[]
   activeAnimation: string
+  activity: CatActivity
+  nextActivityAt: number
   infected: boolean
   alive: boolean
   speed: number
   target: Vector3
 }
+
+type CatActivity = 'Walk' | 'Idle' | 'Idle_Eating'
 
 type Bullet = {
   mesh: Mesh
@@ -54,6 +58,13 @@ const SHOTGUN_RECOIL_Z = 1.18
 const SHOTGUN_REST_ROTATION = new Vector3(0.05, -Math.PI / 2, -0.08)
 const PLAY_LIMIT = WORLD_SIZE / 2 - 1.4
 const MODEL_ROOT = '/world_media/Assets/gltf/'
+const MIN_ACTIVITY_TIME = 7000
+const MAX_ACTIVITY_TIME = 10000
+const CAT_ACTIVITY_WEIGHTS = [
+  { name: 'Walk', weight: 0.7 },
+  { name: 'Idle_Eating', weight: 0.2 },
+  { name: 'Idle', weight: 0.1 },
+] as const satisfies readonly { name: CatActivity; weight: number }[]
 const TREE_ASSETS = [
   'Tree_1_A_Color1.gltf',
   'Tree_1_B_Color1.gltf',
@@ -105,19 +116,34 @@ const GRASS_ASSETS = [
   'Grass_1_B_Color1.gltf',
   'Grass_1_C_Color1.gltf',
   'Grass_1_D_Color1.gltf',
+  'Grass_1_A_Singlesided_Color1.gltf',
+  'Grass_1_B_Singlesided_Color1.gltf',
+  'Grass_1_C_Singlesided_Color1.gltf',
+  'Grass_1_D_Singlesided_Color1.gltf',
+  'Grass_1_Mesh.gltf',
+  'Grass_1_SingleSided_Mesh.gltf',
   'Grass_2_A_Color1.gltf',
   'Grass_2_B_Color1.gltf',
   'Grass_2_C_Color1.gltf',
   'Grass_2_D_Color1.gltf',
+  'Grass_2_A_Singlesided_Color1.gltf',
+  'Grass_2_B_Singlesided_Color1.gltf',
+  'Grass_2_C_Singlesided_Color1.gltf',
+  'Grass_2_D_Singlesided_Color1.gltf',
+  'Grass_2_Mesh.gltf',
+  'Grass_2_SingleSided_Mesh.gltf',
 ]
-
 const app = document.querySelector<HTMLDivElement>('#app')
 
 if (!app) {
   throw new Error('Missing #app root')
 }
+const rootApp = app
 
-app.innerHTML = `
+createKittyGame()
+
+function createKittyGame() {
+rootApp.innerHTML = `
   <canvas id="game-canvas"></canvas>
   <div class="hud">
     <div>
@@ -455,31 +481,68 @@ function createCat(index: number, infected: boolean): Cat {
     label,
     animationGroups: instance?.animationGroups ?? [],
     activeAnimation: '',
+    activity: 'Walk' as CatActivity,
+    nextActivityAt: nextActivityTime(),
     infected,
     alive: true,
     speed: infected ? 0.035 : 0.015 + Math.random() * 0.012,
     target: randomPoint(),
   }
 
-  playCatAnimation(cat, infected ? 'Run' : 'Walk')
+  if (infected) {
+    playCatAnimation(cat, 'Run')
+  } else {
+    assignHealthyActivity(cat, performance.now())
+  }
   return cat
 }
 
-function playCatAnimation(cat: Cat, name: string, loop = true) {
-  if (cat.activeAnimation === name) return
+function playCatAnimation(cat: Cat, name: string, loop = true, restart = false) {
+  if (cat.activeAnimation === name && !restart) return null
 
   const nextAnimation = cat.animationGroups.find((group) => group.name.includes(name))
-  if (!nextAnimation) return
+  if (!nextAnimation) return null
 
   for (const group of cat.animationGroups) {
     group.stop()
   }
   nextAnimation.play(loop)
   cat.activeAnimation = name
+  return nextAnimation
 }
 
 function randomPoint() {
   return new Vector3(Math.random() * (PLAY_LIMIT * 2) - PLAY_LIMIT, 0, Math.random() * (PLAY_LIMIT * 2) - PLAY_LIMIT)
+}
+
+function nextActivityTime(now = performance.now()) {
+  return now + MIN_ACTIVITY_TIME + Math.random() * (MAX_ACTIVITY_TIME - MIN_ACTIVITY_TIME)
+}
+
+function pickHealthyActivity() {
+  const totalWeight = CAT_ACTIVITY_WEIGHTS.reduce((total, activity) => total + activity.weight, 0)
+  let roll = Math.random() * totalWeight
+
+  for (const activity of CAT_ACTIVITY_WEIGHTS) {
+    roll -= activity.weight
+    if (roll <= 0) return activity.name
+  }
+
+  return CAT_ACTIVITY_WEIGHTS[CAT_ACTIVITY_WEIGHTS.length - 1].name
+}
+
+function assignHealthyActivity(cat: Cat, now: number) {
+  cat.activity = pickHealthyActivity()
+  cat.nextActivityAt = nextActivityTime(now)
+  playCatAnimation(cat, cat.activity)
+  if (cat.activity === 'Walk') {
+    cat.target = randomPoint()
+  }
+}
+
+function updateHealthyActivity(cat: Cat, now: number) {
+  if (now < cat.nextActivityAt) return
+  assignHealthyActivity(cat, now)
 }
 
 function updateKittyCount() {
@@ -520,6 +583,8 @@ function infectCat(cat: Cat) {
   cat.infected = true
   cat.speed = 0.035
   cat.target = randomPoint()
+  cat.activity = 'Walk'
+  cat.nextActivityAt = Number.POSITIVE_INFINITY
   playCatAnimation(cat, 'Run')
   statusText.textContent = 'The infection spread by contact'
   updateKittyCount()
@@ -595,6 +660,7 @@ function spreadInfectionByTouch() {
 }
 
 function moveCats() {
+  const now = performance.now()
   for (const cat of cats) {
     if (!cat.alive) continue
 
@@ -603,6 +669,9 @@ function moveCats() {
       if (victim) {
         cat.target = victim.root.position.clone()
       }
+    } else {
+      updateHealthyActivity(cat, now)
+      if (cat.activity !== 'Walk') continue
     }
 
     const delta = cat.target.subtract(cat.root.position)
@@ -671,3 +740,4 @@ engine.runRenderLoop(() => {
 })
 
 window.addEventListener('resize', () => engine.resize())
+}

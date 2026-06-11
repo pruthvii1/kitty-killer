@@ -149,6 +149,16 @@ h1 {
   background: rgba(245, 242, 232, 0.08);
 }
 
+.controls a {
+  color: inherit;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.controls a:hover {
+  color: #f0c36c;
+}
+
 #restart {
   right: 20px;
   bottom: 20px;
