@@ -18,3 +18,7 @@ npm run dev
 ```
 
 Open the local URL printed by Vite.
+
+## Credits
+
+Made because Parth, my 12-year-old cousin, forced me to make this game.
