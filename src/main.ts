@@ -1,6 +1,7 @@
 import './style.css'
 import {
   AbstractMesh,
+  AbstractEngine,
   AnimationGroup,
   Color3,
   Color4,
@@ -15,6 +16,7 @@ import {
   Scene,
   SceneLoader,
   ShadowGenerator,
+  Sound,
   StandardMaterial,
   Texture,
   TransformNode,
@@ -35,6 +37,7 @@ type Cat = {
   alive: boolean
   speed: number
   target: Vector3
+  lastProximitySoundAt: number
 }
 
 type CatActivity = 'Walk' | 'Idle' | 'Idle_Eating'
@@ -47,17 +50,28 @@ type Bullet = {
 
 const WORLD_SIZE = 38
 const WALL_HEIGHT = 4
-const CAT_COUNT = 9
+const MIN_CAT_COUNT = 9
+const MAX_CAT_COUNT = 15
 const CAT_MODEL_SCALE = 0.82
 const BULLET_SPEED = 0.82
 const BULLET_LIFE = 1100
 const INFECTION_TOUCH_DISTANCE = 1.15
+const PLAYER_CAT_PROXIMITY_DISTANCE = 3.2
+const CAT_PROXIMITY_SOUND_COOLDOWN = 7000
 const SHOT_COOLDOWN = 420
 const SHOTGUN_REST_Z = 1.45
 const SHOTGUN_RECOIL_Z = 1.18
 const SHOTGUN_REST_ROTATION = new Vector3(0.05, -Math.PI / 2, -0.08)
 const PLAY_LIMIT = WORLD_SIZE / 2 - 1.4
 const MODEL_ROOT = '/world_media/Assets/gltf/'
+const AUDIO_ROOT = '/audios/'
+const AUDIO = {
+  shotgun: ['loud_shotgun.mp3', 'less_loud_shotgun.mp3'],
+  healthyCat: ['cute_cat.wav', 'normal_cat.mp3'],
+  innocentCat: ['innoscent_cute_cat.mp3'],
+  killedCat: ['angry_cat.wav', 'cat_death_2.wav'],
+  infectedCat: ['infected_cat_angry.wav', 'infected_cat_confused.wav'],
+} as const
 const MIN_ACTIVITY_TIME = 7000
 const MAX_ACTIVITY_TIME = 10000
 const CAT_ACTIVITY_WEIGHTS = [
@@ -169,7 +183,7 @@ const kittyCount = document.querySelector<HTMLSpanElement>('#kitty-count')!
 const statusText = document.querySelector<HTMLSpanElement>('#status')!
 const restartButton = document.querySelector<HTMLButtonElement>('#restart')!
 
-const engine = new Engine(canvas, true)
+const engine = new Engine(canvas, true, { audioEngine: true })
 const scene = new Scene(engine)
 scene.clearColor = new Color4(0.74, 0.88, 0.96, 1)
 
@@ -363,6 +377,38 @@ function shuffled<T>(items: T[]) {
   return result
 }
 
+function randomItem<T>(items: readonly T[]) {
+  return items[Math.floor(Math.random() * items.length)]
+}
+
+function playRandomSound(
+  clips: readonly string[],
+  source?: AbstractMesh | TransformNode | Vector3,
+  options: { volume?: number; maxDistance?: number } = {},
+) {
+  if (!audioUnlocked) {
+    unlockAudio()
+  }
+
+  const sound = new Sound(`sound-${performance.now()}-${Math.random()}`, `${AUDIO_ROOT}${randomItem(clips)}`, scene, () => {
+    sound.play()
+  }, {
+    volume: options.volume ?? 0.85,
+    spatialSound: Boolean(source),
+    maxDistance: options.maxDistance ?? 24,
+    refDistance: 2.2,
+    rolloffFactor: 1.35,
+  })
+
+  if (source instanceof Vector3) {
+    sound.setPosition(source)
+  } else if (source) {
+    sound.attachToMesh(source)
+  }
+
+  window.setTimeout(() => sound.dispose(), 8000)
+}
+
 async function attachShotgun() {
   const result = await SceneLoader.ImportMeshAsync('', '/', 'Shotgun.glb', scene)
   const root = result.meshes[0]
@@ -417,6 +463,16 @@ let shotgunRoot: AbstractMesh | null = null
 let catModel:
   | Awaited<ReturnType<typeof SceneLoader.LoadAssetContainerAsync>>
   | null = null
+let audioUnlocked = false
+
+function unlockAudio() {
+  const audioEngine = AbstractEngine.audioEngine
+  audioEngine?.unlock()
+  void audioEngine?.audioContext?.resume().catch(() => {
+    statusText.textContent = 'Click again to enable audio'
+  })
+  audioUnlocked = Boolean(audioEngine?.unlocked || audioEngine?.audioContext?.state === 'running')
+}
 
 function resetGame() {
   for (const bullet of bullets) {
@@ -431,15 +487,16 @@ function resetGame() {
   }
   cats.length = 0
 
-  const infectedIndex = Math.floor(Math.random() * CAT_COUNT)
-  for (let i = 0; i < CAT_COUNT; i += 1) {
+  const catCount = MIN_CAT_COUNT + Math.floor(Math.random() * (MAX_CAT_COUNT - MIN_CAT_COUNT + 1))
+  const infectedIndex = Math.floor(Math.random() * catCount)
+  for (let i = 0; i < catCount; i += 1) {
     cats.push(createCat(i, i === infectedIndex))
   }
 
   running = true
   lastShot = 0
   restartButton.hidden = true
-  statusText.textContent = 'Find the infected cat'
+  statusText.textContent = ''
   updateKittyCount()
 }
 
@@ -487,6 +544,7 @@ function createCat(index: number, infected: boolean): Cat {
     alive: true,
     speed: infected ? 0.035 : 0.015 + Math.random() * 0.012,
     target: randomPoint(),
+    lastProximitySoundAt: 0,
   }
 
   if (infected) {
@@ -561,6 +619,7 @@ function endGame(message: string) {
 function killCat(cat: Cat) {
   cat.alive = false
   cat.hitbox.setEnabled(false)
+  playRandomSound(AUDIO.killedCat, cat.root, { volume: 0.95, maxDistance: 30 })
   playCatAnimation(cat, 'Death', false)
   for (const mesh of cat.meshes) {
     if (mesh !== cat.hitbox) {
@@ -586,6 +645,7 @@ function infectCat(cat: Cat) {
   cat.activity = 'Walk'
   cat.nextActivityAt = Number.POSITIVE_INFINITY
   playCatAnimation(cat, 'Run')
+  playRandomSound(AUDIO.infectedCat, cat.root, { volume: 0.95, maxDistance: 32 })
   statusText.textContent = 'The infection spread by contact'
   updateKittyCount()
 }
@@ -612,7 +672,20 @@ function shoot() {
     shotgunRoot.rotation.y = SHOTGUN_REST_ROTATION.y + 0.025
     shotgunRoot.rotation.z = SHOTGUN_REST_ROTATION.z + (Math.random() - 0.5) * 0.06
   }
+  playRandomSound(AUDIO.shotgun, muzzleFlash, { volume: 1, maxDistance: 36 })
   showMuzzleEffects(direction)
+}
+
+function updatePlayerCatProximitySounds(now: number) {
+  for (const cat of cats) {
+    if (!cat.alive || cat.infected) continue
+    if (now - cat.lastProximitySoundAt < CAT_PROXIMITY_SOUND_COOLDOWN) continue
+    if (Vector3.Distance(camera.position, cat.root.position) > PLAYER_CAT_PROXIMITY_DISTANCE) continue
+
+    cat.lastProximitySoundAt = now
+    const clips = Math.random() < 0.55 ? AUDIO.innocentCat : AUDIO.healthyCat
+    playRandomSound(clips, cat.root, { volume: 0.65, maxDistance: 18 })
+  }
 }
 
 function updateBullets(deltaMs: number) {
@@ -689,6 +762,8 @@ function moveCats() {
 }
 
 canvas.addEventListener('click', () => {
+  unlockAudio()
+
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock()
     return
@@ -717,6 +792,7 @@ engine.runRenderLoop(() => {
   if (running) {
     moveCats()
     updateBullets(deltaMs)
+    updatePlayerCatProximitySounds(performance.now())
   }
   if (shotgunRoot) {
     shotgunRoot.position.z += (SHOTGUN_REST_Z - shotgunRoot.position.z) * 0.24

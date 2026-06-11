@@ -108,6 +108,10 @@ h1 {
   background: rgba(245, 242, 232, 0.1);
 }
 
+#status:empty {
+  display: none;
+}
+
 .reticle {
   position: absolute;
   top: 50%;
