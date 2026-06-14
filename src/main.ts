@@ -63,8 +63,9 @@ const SHOTGUN_REST_Z = 1.45
 const SHOTGUN_RECOIL_Z = 1.18
 const SHOTGUN_REST_ROTATION = new Vector3(0.05, -Math.PI / 2, -0.08)
 const PLAY_LIMIT = WORLD_SIZE / 2 - 1.4
-const MODEL_ROOT = '/world_media/Assets/gltf/'
-const AUDIO_ROOT = '/audios/'
+const PUBLIC_BASE_URL = import.meta.env.BASE_URL
+const MODEL_ROOT = publicAssetUrl('world_media/Assets/gltf/')
+const AUDIO_ROOT = publicAssetUrl('audios/')
 const AUDIO = {
   shotgun: ['loud_shotgun.mp3', 'less_loud_shotgun.mp3'],
   healthyCat: ['cute_cat.wav', 'normal_cat.mp3'],
@@ -155,6 +156,10 @@ if (!app) {
 const rootApp = app
 
 createKittyGame()
+
+function publicAssetUrl(path: string) {
+  return new URL(path, window.location.origin + PUBLIC_BASE_URL).pathname
+}
 
 function createKittyGame() {
 rootApp.innerHTML = `
@@ -410,7 +415,7 @@ function playRandomSound(
 }
 
 async function attachShotgun() {
-  const result = await SceneLoader.ImportMeshAsync('', '/', 'Shotgun.glb', scene)
+  const result = await SceneLoader.ImportMeshAsync('', PUBLIC_BASE_URL, 'Shotgun.glb', scene)
   const root = result.meshes[0]
   root.parent = camera
   root.position = new Vector3(0.58, -0.62, 1.45)
@@ -777,7 +782,7 @@ restartButton.addEventListener('click', resetGame)
 async function init() {
   statusText.textContent = 'Loading models'
   const [loadedCat] = await Promise.all([
-    SceneLoader.LoadAssetContainerAsync('/', 'cat.glb', scene),
+    SceneLoader.LoadAssetContainerAsync(PUBLIC_BASE_URL, 'cat.glb', scene),
     attachShotgun(),
     placeWorldMedia(),
   ])
